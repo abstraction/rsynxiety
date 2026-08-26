@@ -1,0 +1,26 @@
+{
+  "name": "rsynxiety",
+  "version": "1.0.0",
+  "description": "",
+  "main": "index.js",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "type": "module",
+  "bin": {
+    "rsynxiety": "./bin/rsynxiety.js"
+  },
+  "dependencies": {
+    "@clack/core": "^1.4.3",
+    "@clack/prompts": "^1.7.0",
+    "boxen": "^8.0.1",
+    "commander": "^15.0.0",
+    "execa": "^10.0.1",
+    "listr2": "^11.0.1",
+    "picocolors": "^1.1.1",
+    "pretty-bytes": "^7.1.1"
+  }
+}
