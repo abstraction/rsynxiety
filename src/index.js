@@ -73,7 +73,7 @@ export async function runWizard(options) {
   }
 
   if (!rawSources || rawSources.length === 0) {
-    rawSources = await getPath('Source directories', true);
+    rawSources = await getPath('Sources', true);
   }
   
   if (!destination) {
@@ -107,11 +107,11 @@ export async function runWizard(options) {
             throw new Error(`Cannot transfer the root directory (/). Please select specific subdirectories.`);
           }
           
+          let srcStat;
           try {
-            const srcStat = statSync(source);
-            if (!srcStat.isDirectory()) throw new Error(`Source path '${source}' exists but is not a directory.`);
+            srcStat = statSync(source);
           } catch (e) {
-            throw new Error(`Source directory inaccessible: ${e.message || e}`);
+            throw new Error(`Source inaccessible: ${e.message || e}`);
           }
 
           if (source === destination) {
@@ -124,14 +124,14 @@ export async function runWizard(options) {
           }
 
           const destToSrc = relative(destination, source);
-          if (!destToSrc.startsWith('..') && !isAbsolute(destToSrc) && destToSrc !== '') {
+          if (srcStat.isDirectory() && !destToSrc.startsWith('..') && !isAbsolute(destToSrc) && destToSrc !== '') {
             throw new Error(`Self-nesting risk: Source (${source}) is inside Destination (${destination}).`);
           }
 
           try {
             accessSync(source, constants.R_OK);
           } catch (e) {
-            throw new Error(`Permission denied: Cannot read from source directory '${source}'.`);
+            throw new Error(`Permission denied: Cannot read from source '${source}'.`);
           }
         }
 
@@ -167,6 +167,18 @@ export async function runWizard(options) {
 
           if (!foundPath) {
             throw new Error(`Canary/Sentinel file '${canary}' not found in destination '${destination}' or any parent mount point. Aborting to prevent accidental root/wrong-mount pollution.`);
+          }
+        }
+
+        try {
+          const destStat = statSync(destination);
+          if (!destStat.isDirectory()) {
+            throw new Error(`Destination path '${destination}' exists but is not a directory.`);
+          }
+        } catch (e) {
+          if (e.message.includes('exists but is not a directory')) throw e;
+          if (e.code !== 'ENOENT') {
+            throw new Error(`Destination directory inaccessible: ${e.message || e}`);
           }
         }
 
@@ -258,7 +270,7 @@ export async function runWizard(options) {
                     if (errors.length > 0) {
                       throw new Error(`VERIFICATION FAILED for ${basename(source)}!\n${errors.slice(0, 5).join('\n')}${errors.length > 5 ? `\n...and ${errors.length - 5} more mismatches.` : ''}`);
                     }
-                    auditTask.title = `Hashes match (${auditCtx.sourceManifest.size} files verified)`;
+                    auditTask.title = `Hashes match (${auditCtx.sourceManifest.size} file${auditCtx.sourceManifest.size === 1 ? '' : 's'} verified)`;
                   }
                 }
               ], { concurrent: false });

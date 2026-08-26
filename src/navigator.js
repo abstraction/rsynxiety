@@ -6,8 +6,8 @@ import os from 'os';
 
 const dirCache = new Map();
 
-function loadDirectories(currentPath, showHidden = false) {
-  const cacheKey = `${currentPath}|${showHidden}`;
+function loadDirectories(currentPath, showHidden = false, showFiles = false) {
+  const cacheKey = `${currentPath}|${showHidden}|${showFiles}`;
   if (dirCache.has(cacheKey)) return dirCache.get(cacheKey);
 
   let directories = [];
@@ -16,11 +16,25 @@ function loadDirectories(currentPath, showHidden = false) {
     const entries = readdirSync(currentPath, { withFileTypes: true });
     for (const entry of entries) {
       if (!showHidden && entry.name.startsWith('.')) continue;
-      if (entry.isDirectory() || entry.isSymbolicLink()) {
-        directories.push(entry.name);
+      let isDir = entry.isDirectory();
+      if (entry.isSymbolicLink()) {
+        try {
+          isDir = statSync(join(currentPath, entry.name)).isDirectory();
+        } catch(e) {
+          isDir = false;
+        }
+      }
+      if (isDir) {
+        directories.push({ name: entry.name, isDir: true });
+      } else if (showFiles && entry.isFile()) {
+        directories.push({ name: entry.name, isDir: false });
       }
     }
-    directories.sort((a, b) => a.localeCompare(b, undefined, { sensitivity: 'base' }));
+    directories.sort((a, b) => {
+      if (a.isDir && !b.isDir) return -1;
+      if (!a.isDir && b.isDir) return 1;
+      return a.name.localeCompare(b.name, undefined, { sensitivity: 'base' });
+    });
   } catch (e) {
     error = e.code === 'EACCES' ? 'Permission Denied' : 'Inaccessible';
   }
@@ -53,9 +67,7 @@ class FileNavigatorPrompt extends Prompt {
         const countBadge = allowMultiple 
           ? pc.cyan(` [${this.selectedPaths.size} selected]`)
           : '';
-        const helpText = allowMultiple
-          ? '←/Backspace up  → open  Space select  Enter submit  a toggle hidden'
-          : '←/Backspace up  → open  Space select  Enter submit';
+        const helpText = '←/Backspace up  → open  Space select  Enter submit  a toggle hidden  f toggle files';
         const helpLine = `${pc.gray('│')}  ${pc.dim(helpText)}${countBadge}\n`;
 
         const totalItems = this.directories.length + 1; // +1 for [Current Directory]
@@ -96,13 +108,15 @@ class FileNavigatorPrompt extends Prompt {
             const label = `[Select Current Directory: ${basename(this.currentPath) || this.currentPath}]`;
             list += `${pc.gray('│')}  ${prefix} ${marker} ${isHover ? pc.underline(pc.bold(label)) : pc.bold(label)}\n`;
           } else {
-            const dir = this.directories[i - 1];
-            const fullPath = join(this.currentPath, dir);
+            const entry = this.directories[i - 1];
+            const name = entry.name;
+            const fullPath = join(this.currentPath, name);
             const isSelected = allowMultiple 
               ? this.selectedPaths.has(fullPath)
               : this.selectedSingle === fullPath;
             const marker = isSelected ? pc.green('◉') : pc.gray('◯');
-            list += `${pc.gray('│')}  ${prefix} ${marker} 📁 ${isHover ? pc.underline(dir) : dir}\n`;
+            const icon = entry.isDir ? '📁' : '📄';
+            list += `${pc.gray('│')}  ${prefix} ${marker} ${icon} ${isHover ? pc.underline(name) : name}\n`;
           }
         }
 
@@ -112,6 +126,7 @@ class FileNavigatorPrompt extends Prompt {
 
     this.allowMultiple = allowMultiple;
     this.showHidden = false;
+    this.showFiles = false;
     this.basePath = resolve(opts.basePath || os.homedir());
     this.currentPath = this.basePath;
     this.selectedPaths = new Set();
@@ -119,7 +134,7 @@ class FileNavigatorPrompt extends Prompt {
     this.cursor = 0;
     this.history = new Map(); // stores last active child directory per parent path
 
-    const { directories, error } = loadDirectories(this.currentPath, this.showHidden);
+    const { directories, error } = loadDirectories(this.currentPath, this.showHidden, this.showFiles);
     this.directories = directories;
     this.dirError = error;
 
@@ -142,32 +157,35 @@ class FileNavigatorPrompt extends Prompt {
           const currentFolderName = basename(this.currentPath);
           this.history.set(parent, currentFolderName);
           this.currentPath = parent;
-          const res = loadDirectories(this.currentPath, this.showHidden);
+          const res = loadDirectories(this.currentPath, this.showHidden, this.showFiles);
           this.directories = res.directories;
           this.dirError = res.error;
 
           // Restore cursor to previous folder
-          const prevIdx = this.directories.indexOf(currentFolderName);
+          const prevIdx = this.directories.findIndex(e => e.name === currentFolderName);
           this.cursor = prevIdx !== -1 ? prevIdx + 1 : 0;
         }
       } 
       // 4. Drill Down (Right arrow, 'l')
       else if (keyName === 'right' || key === 'l') {
         if (this.cursor > 0 && this.directories[this.cursor - 1]) {
-          const dir = this.directories[this.cursor - 1];
-          this.history.set(this.currentPath, dir);
-          this.currentPath = join(this.currentPath, dir);
-          const res = loadDirectories(this.currentPath, this.showHidden);
-          this.directories = res.directories;
-          this.dirError = res.error;
-          this.cursor = 0;
+          const entry = this.directories[this.cursor - 1];
+          if (entry.isDir) {
+            const dir = entry.name;
+            this.history.set(this.currentPath, dir);
+            this.currentPath = join(this.currentPath, dir);
+            const res = loadDirectories(this.currentPath, this.showHidden, this.showFiles);
+            this.directories = res.directories;
+            this.dirError = res.error;
+            this.cursor = 0;
+          }
         }
       } 
       // 5. Toggle Selection (Space)
       else if (keyName === 'space') {
         let togglePath = this.currentPath;
         if (this.cursor > 0) {
-          togglePath = join(this.currentPath, this.directories[this.cursor - 1]);
+          togglePath = join(this.currentPath, this.directories[this.cursor - 1].name);
         }
         if (this.allowMultiple) {
           if (this.selectedPaths.has(togglePath)) {
@@ -182,7 +200,15 @@ class FileNavigatorPrompt extends Prompt {
       // 6. Toggle Hidden Files ('a')
       else if (key === 'a' || key === 'A') {
         this.showHidden = !this.showHidden;
-        const res = loadDirectories(this.currentPath, this.showHidden);
+        const res = loadDirectories(this.currentPath, this.showHidden, this.showFiles);
+        this.directories = res.directories;
+        this.dirError = res.error;
+        this.cursor = Math.min(this.cursor, this.directories.length);
+      }
+      // Toggle File View ('f')
+      else if (key === 'f' || key === 'F') {
+        this.showFiles = !this.showFiles;
+        const res = loadDirectories(this.currentPath, this.showHidden, this.showFiles);
         this.directories = res.directories;
         this.dirError = res.error;
         this.cursor = Math.min(this.cursor, this.directories.length);
@@ -192,7 +218,7 @@ class FileNavigatorPrompt extends Prompt {
         if (this.allowMultiple) {
           if (this.selectedPaths.size === 0) {
             if (this.cursor > 0 && this.directories[this.cursor - 1]) {
-              this.value = [join(this.currentPath, this.directories[this.cursor - 1])];
+              this.value = [join(this.currentPath, this.directories[this.cursor - 1].name)];
             } else {
               this.value = [this.currentPath];
             }
@@ -200,7 +226,9 @@ class FileNavigatorPrompt extends Prompt {
             this.value = Array.from(this.selectedPaths);
           }
         } else {
-          if (this.cursor === 0 || !this.selectedSingle) {
+          if (!this.selectedSingle && this.cursor > 0 && this.directories[this.cursor - 1]) {
+            this.value = [join(this.currentPath, this.directories[this.cursor - 1].name)];
+          } else if (!this.selectedSingle) {
             this.value = [this.currentPath];
           } else {
             this.value = [this.selectedSingle];

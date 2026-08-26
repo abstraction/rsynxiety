@@ -1,13 +1,23 @@
 import { execa } from 'execa';
 import readline from 'readline';
 import { readdir, stat } from 'fs/promises';
-import { join, relative } from 'path';
+import { join, relative, basename, dirname } from 'path';
 import prettyBytes from 'pretty-bytes';
 
 export async function getDirectoryStats(dir, canaryFile = '.drive_id', concurrency = 32) {
   let totalBytes = 0;
   let totalFiles = 0;
   const fileSizes = new Map();
+
+  try {
+    const s = await stat(dir);
+    if (s.isFile()) {
+      fileSizes.set(basename(dir), s.size);
+      return { totalBytes: s.size, totalFiles: 1, fileSizes };
+    }
+  } catch (e) {
+    return { totalBytes: 0, totalFiles: 0, fileSizes };
+  }
   
   const queue = [dir];
   let active = 0;
@@ -82,20 +92,30 @@ export async function hashDirectory(baseDir, onProgress, canaryFile = '.drive_id
   let processedFiles = 0;
   const startTime = Date.now();
 
-  const findProc = execa('find', [
-    '.',
-    '-type', 'f',
-    '!', '-name', canaryFile,
-    '!', '-name', '.DS_Store',
-    '!', '-path', '*/.rsync-partial/*',
-    '!', '-name', '.rsync-partial',
-    '-print0'
-  ], { cwd: baseDir, buffer: false });
+  let isFile = false;
+  try {
+    const s = statSync(baseDir);
+    isFile = s.isFile();
+  } catch (e) {}
 
-  const hashProc = execa('xargs', ['-0', 'xxh128sum', '--'], {
-    cwd: baseDir,
-    buffer: false
-  });
+  let findProc, hashProc;
+  if (isFile) {
+    const parentDir = dirname(baseDir);
+    const baseName = basename(baseDir);
+    findProc = execa('printf', ['%s\\0', baseName], { cwd: parentDir, buffer: false });
+    hashProc = execa('xargs', ['-0', 'xxh128sum', '--'], { cwd: parentDir, buffer: false });
+  } else {
+    findProc = execa('find', [
+      '.',
+      '-type', 'f',
+      '!', '-name', canaryFile,
+      '!', '-name', '.DS_Store',
+      '!', '-path', '*/.rsync-partial/*',
+      '!', '-name', '.rsync-partial',
+      '-print0'
+    ], { cwd: baseDir, buffer: false });
+    hashProc = execa('xargs', ['-0', 'xxh128sum', '--'], { cwd: baseDir, buffer: false });
+  }
   
   findProc.stdout.pipe(hashProc.stdin);
 
@@ -131,7 +151,7 @@ export async function hashDirectory(baseDir, onProgress, canaryFile = '.drive_id
       manifest.set(cleanRelPath, hash);
 
       processedFiles++;
-      if (onProgress && stats.totalBytes > 0) {
+      if (onProgress && stats.totalBytes >= 0) {
         const size = stats.fileSizes.get(cleanRelPath) || 0;
         processedBytes += size;
         
@@ -205,7 +225,7 @@ export function compareManifests(sourceManifest, destManifest) {
 }
 
 import { statSync, readFileSync } from 'fs';
-import { execSync } from 'child_process';
+import { execSync, execFileSync } from 'child_process';
 
 function getDeviceTopology(dirPath) {
   try {
@@ -213,7 +233,7 @@ function getDeviceTopology(dirPath) {
     let parentDisk = dirPath;
     let isRotational = true;
     try {
-      const dfOutput = execSync(`df --output=source "${dirPath}"`, { encoding: 'utf8' }).trim().split('\n')[1];
+      const dfOutput = execFileSync('df', ['--output=source', dirPath], { encoding: 'utf8' }).trim().split('\n')[1];
       const match = dfOutput.match(/\/dev\/([a-z]+|[a-z]+[0-9]+n[0-9]+)/);
       parentDisk = match ? match[1].replace(/[0-9]+$/, '') : dfOutput;
       
