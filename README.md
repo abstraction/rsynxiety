@@ -1,8 +1,10 @@
-<p>
-  <img src="./logo.svg" alt="rsynxiety" height="80">
-</p>
+<div align="center">
+  <p>
+    <img src="./logo.svg" alt="rsynxiety" height="80">
+  </p>
+</div>
 
-# rsynxiety
+---
 
 Copying terabytes of video files between hard drives requires care. Transfers can fail halfway through. A bad sector can corrupt a file during transit.
 
