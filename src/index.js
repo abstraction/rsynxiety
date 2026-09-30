@@ -97,7 +97,7 @@ export async function runWizard(options) {
   let { sources: rawSources, destination, canary, skipHash, dryRun } = options;
   const { navigateDirectory } = await import('./navigator.js');
 
-  async function getPath(label, allowMultiple = false) {
+  async function getPath(label, allowMultiple = false, availableBytes = undefined) {
     const method = await p.select({
       message: `${label} - How would you like to select the path?`,
       options: [
@@ -112,7 +112,7 @@ export async function runWizard(options) {
     }
 
     if (method === 'browse') {
-      return await navigateDirectory(`Navigate to your ${label.toLowerCase()}`, undefined, allowMultiple);
+      return await navigateDirectory(`Navigate to your ${label.toLowerCase()}`, undefined, allowMultiple, availableBytes);
     } else {
       const paths = [];
       while (true) {
@@ -140,15 +140,32 @@ export async function runWizard(options) {
     }
   }
 
-  if (!rawSources || rawSources.length === 0) {
-    rawSources = await getPath('Sources', true);
-  }
-  
   if (!destination) {
     const destArr = await getPath('Destination directory', false);
     destination = destArr[0];
   }
   destination = resolve(destination);
+
+  // Calculate free space to pass into source selector
+  const { execa } = await import('execa');
+  const { dirname } = await import('path');
+  let availableBytesForPrompt = Infinity;
+  let currentDirForDf = destination;
+  while (true) {
+    try {
+      const { stdout } = await execa('df', ['--output=avail', '--block-size=1', currentDirForDf]);
+      availableBytesForPrompt = parseInt(stdout.trim().split('\n').pop(), 10);
+      break;
+    } catch (e) {
+      const parent = dirname(currentDirForDf);
+      if (parent === currentDirForDf) break;
+      currentDirForDf = parent;
+    }
+  }
+
+  if (!rawSources || rawSources.length === 0) {
+    rawSources = await getPath('Sources', true, availableBytesForPrompt);
+  }
 
   const sources = sanitizeSources(rawSources);
 

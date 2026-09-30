@@ -3,22 +3,21 @@ import pc from 'picocolors';
 import { readdirSync, statSync } from 'fs';
 import { join, resolve, dirname, basename } from 'path';
 import os from 'os';
-import { execa } from 'execa';
 import prettyBytes from 'pretty-bytes';
+import { getDirectoryStats } from './hash.js';
 
 const dirCache = new Map();
-const sizeCache = new Map();
+const sizeCache = new Map(); // path -> { bytes, files }
 const pendingSizes = new Set();
 
 async function fetchDirSize(dirPath, promptInstance) {
   if (sizeCache.has(dirPath) || pendingSizes.has(dirPath)) return;
   pendingSizes.add(dirPath);
   try {
-    const { stdout } = await execa('du', ['-sb', dirPath]);
-    const size = parseInt(stdout.split('\t')[0], 10);
-    sizeCache.set(dirPath, prettyBytes(size));
+    const stats = await getDirectoryStats(dirPath);
+    sizeCache.set(dirPath, { bytes: stats.totalBytes, files: stats.totalFiles });
   } catch (e) {
-    sizeCache.set(dirPath, '?');
+    sizeCache.set(dirPath, { bytes: -1, files: -1 });
   } finally {
     pendingSizes.delete(dirPath);
     if (promptInstance.state !== 'submit' && promptInstance.state !== 'cancel') {
@@ -53,7 +52,7 @@ function loadDirectories(currentPath, showHidden = false, showFiles = false) {
         directories.push({ name: entry.name, isDir: false });
         try {
            const fSize = statSync(join(currentPath, entry.name)).size;
-           sizeCache.set(join(currentPath, entry.name), prettyBytes(fSize));
+           sizeCache.set(join(currentPath, entry.name), { bytes: fSize, files: 1 });
         } catch {}
       }
     }
@@ -91,9 +90,45 @@ class FileNavigatorPrompt extends Prompt {
         const title = `${pc.cyan('◆')}  ${opts.message}\n`;
         const pathLine = `${pc.gray('│')}  Current: ${pc.bold(this.currentPath)}\n`;
         
-        const countBadge = allowMultiple 
-          ? pc.cyan(` [${this.selectedPaths.size} selected]`)
-          : '';
+        let selectedBytes = 0;
+        let selectedFiles = 0;
+        let isCalculating = false;
+
+        if (allowMultiple && this.selectedPaths.size > 0) {
+          for (const sp of this.selectedPaths) {
+            if (sizeCache.has(sp)) {
+              const stats = sizeCache.get(sp);
+              if (stats.bytes >= 0) {
+                selectedBytes += stats.bytes;
+                selectedFiles += stats.files;
+              }
+            } else {
+              isCalculating = true;
+              setTimeout(() => fetchDirSize(sp, this), 0);
+            }
+          }
+        }
+
+        let countBadge = '';
+        if (allowMultiple) {
+          let sizeStr = '';
+          if (this.selectedPaths.size > 0) {
+            if (isCalculating) {
+              sizeStr = ` - ... calculating`;
+            } else {
+              sizeStr = ` - ${prettyBytes(selectedBytes)} (${selectedFiles} files)`;
+            }
+          }
+          countBadge = pc.cyan(` [${this.selectedPaths.size} selected${sizeStr}]`);
+        }
+
+        let destSpaceStr = '';
+        if (opts.availableBytes !== undefined && opts.availableBytes !== Infinity) {
+          const remaining = opts.availableBytes - selectedBytes;
+          const remainingStr = remaining >= 0 ? pc.green(prettyBytes(remaining)) : pc.red(prettyBytes(remaining));
+          destSpaceStr = `${pc.gray('│')}  Destination free: ${pc.bold(prettyBytes(opts.availableBytes))} (Remaining: ${remainingStr})\n`;
+        }
+
         const helpText = '←/Backspace up  → open  Space select  Enter submit  a toggle hidden  f toggle files';
         const helpLine = `${pc.gray('│')}  ${pc.dim(helpText)}${countBadge}\n`;
 
@@ -153,7 +188,9 @@ class FileNavigatorPrompt extends Prompt {
             let sizeDisplay = '';
             if (entry.isDir || entry.isFile()) {
               if (sizeCache.has(fullPath)) {
-                sizeDisplay = pc.dim(sizeCache.get(fullPath).padStart(10));
+                const stats = sizeCache.get(fullPath);
+                const str = stats.bytes >= 0 ? prettyBytes(stats.bytes) : '?';
+                sizeDisplay = pc.dim(str.padStart(10));
               } else {
                 sizeDisplay = pc.dim('...'.padStart(10));
                 if (entry.isDir) {
@@ -174,7 +211,7 @@ class FileNavigatorPrompt extends Prompt {
           }, 0);
         }
 
-        return title + pathLine + helpLine + divider + list;
+        return title + pathLine + destSpaceStr + helpLine + divider + list;
       }
     }, false);
 
@@ -285,8 +322,8 @@ class FileNavigatorPrompt extends Prompt {
   }
 }
 
-export async function navigateDirectory(message, basePath = os.homedir(), allowMultiple = false) {
-  const prompt = new FileNavigatorPrompt({ message, basePath, allowMultiple, maxItems: 12 });
+export async function navigateDirectory(message, basePath = os.homedir(), allowMultiple = false, availableBytes = undefined) {
+  const prompt = new FileNavigatorPrompt({ message, basePath, allowMultiple, maxItems: 12, availableBytes });
   const result = await prompt.prompt();
   if (isCancel(result)) {
     console.log(pc.red('Operation cancelled.'));
