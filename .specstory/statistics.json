@@ -1,0 +1,13 @@
+{
+  "sessions": {
+    "2b1acddb-89ae-490e-99a7-c1ddea17480d": {
+      "user_message_count": 3,
+      "agent_message_count": 20,
+      "start_timestamp": "2026-09-25T06:48:04Z",
+      "end_timestamp": "2026-09-25T06:51:17Z",
+      "markdown_size_bytes": 13941,
+      "provider": "antigravity",
+      "last_updated": "2026-09-30T10:02:36Z"
+    }
+  }
+}

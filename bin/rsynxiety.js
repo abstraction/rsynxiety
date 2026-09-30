@@ -11,6 +11,7 @@ program
   .argument('[paths...]', 'Source directories followed by Destination directory')
   .option('--canary <filename>', 'Require a specific canary/sentinel file (e.g. .drive_id) on the destination')
   .option('--skip-hash', 'Skip the hash verification phase')
+  .option('--dry-run', 'Preview what would be transferred without actually copying')
   .action(async (paths, options) => {
     try {
       let sources = [];

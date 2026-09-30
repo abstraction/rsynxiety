@@ -1,6 +1,20 @@
 import { execa } from 'execa';
 
-export async function executeTransfer(sources, destination, onProgress) {
+const RSYNC_ERRORS = {
+  1: 'Syntax error in rsync command arguments.',
+  2: 'Protocol incompatibility between rsync versions.',
+  3: 'File selection errors — check source paths.',
+  5: 'Startup error — is the destination drive still connected?',
+  10: 'Socket I/O error — check network or drive connection.',
+  11: 'File I/O error — the drive may have disconnected. Check USB cable and retry.',
+  12: 'rsync protocol data stream error.',
+  20: 'Transfer interrupted (SIGUSR1/SIGINT received).',
+  23: 'Some files could not be transferred (partial transfer due to error). Successfully transferred files are intact.',
+  24: 'Some source files vanished before they could be transferred. This is usually harmless.',
+  30: 'Transfer timed out (--timeout). The drive may be sleeping or disconnected.',
+};
+
+export async function executeTransfer(sources, destination, onProgress, options = {}) {
   // Normalize paths: strip multiple trailing slashes, preserve '/' for root
   const srcs = sources.map(s => {
     const trimmed = s.replace(/[\/\\]+$/, '');
@@ -19,11 +33,14 @@ export async function executeTransfer(sources, destination, onProgress) {
     '--partial-dir=.rsync-partial',
     '--timeout=30',
     '--info=progress2',
-    '--fsync',
-    '--',
-    ...srcs,
-    dest
+    '--fsync'
   ];
+  
+  if (options.dryRun) {
+    args.push('-n');
+  }
+  
+  args.push('--', ...srcs, dest);
 
   const subprocess = execa('rsync', args, { buffer: false });
 
@@ -58,6 +75,10 @@ export async function executeTransfer(sources, destination, onProgress) {
     return { success: true };
   } catch (error) {
     const errorDetails = stderrBuffer.trim() || error.message;
-    throw new Error(`rsync failed with exit code ${error.exitCode}: ${errorDetails}`);
+    const friendlyMessage = RSYNC_ERRORS[error.exitCode] 
+      ? `${RSYNC_ERRORS[error.exitCode]} (Exit code ${error.exitCode})` 
+      : `rsync failed with exit code ${error.exitCode}`;
+    
+    throw new Error(`${friendlyMessage}\nDetails: ${errorDetails}`);
   }
 }

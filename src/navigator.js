@@ -3,8 +3,31 @@ import pc from 'picocolors';
 import { readdirSync, statSync } from 'fs';
 import { join, resolve, dirname, basename } from 'path';
 import os from 'os';
+import { execa } from 'execa';
+import prettyBytes from 'pretty-bytes';
 
 const dirCache = new Map();
+const sizeCache = new Map();
+const pendingSizes = new Set();
+
+async function fetchDirSize(dirPath, promptInstance) {
+  if (sizeCache.has(dirPath) || pendingSizes.has(dirPath)) return;
+  pendingSizes.add(dirPath);
+  try {
+    const { stdout } = await execa('du', ['-sb', dirPath]);
+    const size = parseInt(stdout.split('\t')[0], 10);
+    sizeCache.set(dirPath, prettyBytes(size));
+  } catch (e) {
+    sizeCache.set(dirPath, '?');
+  } finally {
+    pendingSizes.delete(dirPath);
+    if (promptInstance.state !== 'submit' && promptInstance.state !== 'cancel') {
+      if (promptInstance.input && promptInstance.input.emit) {
+        promptInstance.input.emit('keypress', undefined, { name: 'clear' });
+      }
+    }
+  }
+}
 
 function loadDirectories(currentPath, showHidden = false, showFiles = false) {
   const cacheKey = `${currentPath}|${showHidden}|${showFiles}`;
@@ -28,6 +51,10 @@ function loadDirectories(currentPath, showHidden = false, showFiles = false) {
         directories.push({ name: entry.name, isDir: true });
       } else if (showFiles && entry.isFile()) {
         directories.push({ name: entry.name, isDir: false });
+        try {
+           const fSize = statSync(join(currentPath, entry.name)).size;
+           sizeCache.set(join(currentPath, entry.name), prettyBytes(fSize));
+        } catch {}
       }
     }
     directories.sort((a, b) => {
@@ -96,6 +123,8 @@ class FileNavigatorPrompt extends Prompt {
           list += `${pc.gray('│')}  ${pc.red(`✖ ${this.dirError}`)}\n`;
         }
 
+        const visiblePaths = [];
+
         for (let i = startIdx; i < endIdx; i++) {
           const isHover = this.cursor === i;
           const prefix = isHover ? pc.cyan('❯') : ' ';
@@ -116,8 +145,33 @@ class FileNavigatorPrompt extends Prompt {
               : this.selectedSingle === fullPath;
             const marker = isSelected ? pc.green('◉') : pc.gray('◯');
             const icon = entry.isDir ? '📁' : '📄';
-            list += `${pc.gray('│')}  ${prefix} ${marker} ${icon} ${isHover ? pc.underline(name) : name}\n`;
+            
+            const labelStr = isHover ? pc.underline(name) : name;
+            const plainNameLength = name.length;
+            const padSpaces = Math.max(1, 45 - plainNameLength);
+            
+            let sizeDisplay = '';
+            if (entry.isDir || entry.isFile()) {
+              if (sizeCache.has(fullPath)) {
+                sizeDisplay = pc.dim(sizeCache.get(fullPath).padStart(10));
+              } else {
+                sizeDisplay = pc.dim('...'.padStart(10));
+                if (entry.isDir) {
+                  visiblePaths.push(fullPath);
+                }
+              }
+            }
+            
+            list += `${pc.gray('│')}  ${prefix} ${marker} ${icon} ${labelStr}${' '.repeat(padSpaces)}${sizeDisplay}\n`;
           }
+        }
+
+        if (visiblePaths.length > 0) {
+          setTimeout(() => {
+            for (const p of visiblePaths) {
+              fetchDirSize(p, this);
+            }
+          }, 0);
         }
 
         return title + pathLine + helpLine + divider + list;
@@ -132,7 +186,7 @@ class FileNavigatorPrompt extends Prompt {
     this.selectedPaths = new Set();
     this.selectedSingle = null;
     this.cursor = 0;
-    this.history = new Map(); // stores last active child directory per parent path
+    this.history = new Map();
 
     const { directories, error } = loadDirectories(this.currentPath, this.showHidden, this.showFiles);
     this.directories = directories;
@@ -142,15 +196,12 @@ class FileNavigatorPrompt extends Prompt {
       const len = this.directories.length + 1;
       const keyName = l.name;
 
-      // 1. Up Navigation (Up arrow, 'k')
       if (keyName === 'up' || key === 'k') {
         this.cursor = this.cursor <= 0 ? 0 : this.cursor - 1;
       } 
-      // 2. Down Navigation (Down arrow, 'j')
       else if (keyName === 'down' || key === 'j') {
         this.cursor = this.cursor >= len - 1 ? len - 1 : this.cursor + 1;
       } 
-      // 3. Parent Navigation (Left arrow, 'h', Backspace)
       else if (keyName === 'left' || key === 'h' || keyName === 'backspace') {
         const parent = dirname(this.currentPath);
         if (parent !== this.currentPath) {
@@ -161,12 +212,10 @@ class FileNavigatorPrompt extends Prompt {
           this.directories = res.directories;
           this.dirError = res.error;
 
-          // Restore cursor to previous folder
           const prevIdx = this.directories.findIndex(e => e.name === currentFolderName);
           this.cursor = prevIdx !== -1 ? prevIdx + 1 : 0;
         }
       } 
-      // 4. Drill Down (Right arrow, 'l')
       else if (keyName === 'right' || key === 'l') {
         if (this.cursor > 0 && this.directories[this.cursor - 1]) {
           const entry = this.directories[this.cursor - 1];
@@ -181,7 +230,6 @@ class FileNavigatorPrompt extends Prompt {
           }
         }
       } 
-      // 5. Toggle Selection (Space)
       else if (keyName === 'space') {
         let togglePath = this.currentPath;
         if (this.cursor > 0) {
@@ -197,7 +245,6 @@ class FileNavigatorPrompt extends Prompt {
           this.selectedSingle = (this.selectedSingle === togglePath) ? null : togglePath;
         }
       } 
-      // 6. Toggle Hidden Files ('a')
       else if (key === 'a' || key === 'A') {
         this.showHidden = !this.showHidden;
         const res = loadDirectories(this.currentPath, this.showHidden, this.showFiles);
@@ -205,7 +252,6 @@ class FileNavigatorPrompt extends Prompt {
         this.dirError = res.error;
         this.cursor = Math.min(this.cursor, this.directories.length);
       }
-      // Toggle File View ('f')
       else if (key === 'f' || key === 'F') {
         this.showFiles = !this.showFiles;
         const res = loadDirectories(this.currentPath, this.showHidden, this.showFiles);
@@ -213,7 +259,6 @@ class FileNavigatorPrompt extends Prompt {
         this.dirError = res.error;
         this.cursor = Math.min(this.cursor, this.directories.length);
       }
-      // 7. Submit / Select (Enter/Return)
       else if (keyName === 'return' || keyName === 'enter') {
         if (this.allowMultiple) {
           if (this.selectedPaths.size === 0) {
