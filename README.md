@@ -1,6 +1,10 @@
 <div align="center">
   <p>
-    <img src="./logo.svg" alt="rsynxiety" height="80">
+    <picture>
+      <source media="(prefers-color-scheme: dark)" srcset="./logo-dark.svg">
+      <source media="(prefers-color-scheme: light)" srcset="./logo-light.svg">
+      <img alt="rsynxiety" src="./logo-light.svg" height="80">
+    </picture>
   </p>
 </div>
 
