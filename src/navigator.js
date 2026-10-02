@@ -39,21 +39,27 @@ function loadDirectories(currentPath, showHidden = false, showFiles = false) {
     for (const entry of entries) {
       if (!showHidden && entry.name.startsWith('.')) continue;
       let isDir = entry.isDirectory();
+      let isFile = entry.isFile();
       if (entry.isSymbolicLink()) {
         try {
-          isDir = statSync(join(currentPath, entry.name)).isDirectory();
-        } catch(e) {
+          const s = statSync(join(currentPath, entry.name));
+          isDir = s.isDirectory();
+          isFile = s.isFile();
+        } catch (e) {
           isDir = false;
+          isFile = false;
         }
       }
       if (isDir) {
-        directories.push({ name: entry.name, isDir: true });
-      } else if (showFiles && entry.isFile()) {
-        directories.push({ name: entry.name, isDir: false });
+        directories.push({ name: entry.name, isDir: true, isFile: false });
+      } else if (showFiles && isFile) {
+        directories.push({ name: entry.name, isDir: false, isFile: true });
         try {
-           const fSize = statSync(join(currentPath, entry.name)).size;
-           sizeCache.set(join(currentPath, entry.name), { bytes: fSize, files: 1 });
-        } catch {}
+          const fSize = statSync(join(currentPath, entry.name)).size;
+          sizeCache.set(join(currentPath, entry.name), { bytes: fSize, files: 1 });
+        } catch {
+          sizeCache.set(join(currentPath, entry.name), { bytes: -1, files: 0 });
+        }
       }
     }
     directories.sort((a, b) => {
@@ -186,7 +192,7 @@ class FileNavigatorPrompt extends Prompt {
             const padSpaces = Math.max(1, 45 - plainNameLength);
             
             let sizeDisplay = '';
-            if (entry.isDir || entry.isFile()) {
+            if (entry.isDir || entry.isFile) {
               if (sizeCache.has(fullPath)) {
                 const stats = sizeCache.get(fullPath);
                 const str = stats.bytes >= 0 ? prettyBytes(stats.bytes) : '?';
